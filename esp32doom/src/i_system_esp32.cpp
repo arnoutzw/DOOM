@@ -16,6 +16,11 @@
 
 #include <Arduino.h>
 #include <stdarg.h>
+#include <Wire.h>
+
+#ifdef USE_TOUCH_INPUT
+#include "i_touch.h"
+#endif
 
 extern "C" {
 #include "doomdef.h"
@@ -31,10 +36,10 @@ void D_PostEvent(event_t* ev);
 
 // Button pins - defined in platformio.ini
 #ifndef BUTTON_1
-#define BUTTON_1 0
+#define BUTTON_1 -1
 #endif
 #ifndef BUTTON_2
-#define BUTTON_2 35
+#define BUTTON_2 -1
 #endif
 
 // Zone memory size - ESP32 has limited RAM
@@ -58,11 +63,21 @@ void I_Init(void)
 {
     // Initialize serial for debugging
     Serial.begin(115200);
-    Serial.println("DOOM for ESP32 T-Display initializing...");
+    Serial.println("DOOM for ESP32 initializing...");
 
-    // Initialize buttons
+    // Initialize buttons if available
+#if BUTTON_1 >= 0
     pinMode(BUTTON_1, INPUT_PULLUP);
+#endif
+#if BUTTON_2 >= 0
     pinMode(BUTTON_2, INPUT_PULLUP);
+#endif
+
+#ifdef USE_TOUCH_INPUT
+    // Initialize touch controller
+    I_InitTouch();
+    Serial.println("Touch input enabled");
+#endif
 
     // Record start time
     startTime = millis();
@@ -115,6 +130,7 @@ void I_StartTic(void)
 {
     event_t event;
 
+#if BUTTON_1 >= 0
     // Read button 1 (typically used as fire/enter)
     bool button1State = digitalRead(BUTTON_1);
     if (button1State != lastButton1State) {
@@ -125,7 +141,9 @@ void I_StartTic(void)
         D_PostEvent(&event);
         lastButton1State = button1State;
     }
+#endif
 
+#if BUTTON_2 >= 0
     // Read button 2 (typically used as use/back)
     bool button2State = digitalRead(BUTTON_2);
     if (button2State != lastButton2State) {
@@ -136,6 +154,12 @@ void I_StartTic(void)
         D_PostEvent(&event);
         lastButton2State = button2State;
     }
+#endif
+
+#ifdef USE_TOUCH_INPUT
+    // Process touch input
+    I_UpdateTouch();
+#endif
 
     // Yield to other tasks
     yield();

@@ -1,11 +1,12 @@
-# DOOM for ESP32 T-Display
+# DOOM for ESP32 Displays
 
-This is a port of the original DOOM source code to ESP32-based devices, specifically targeting the LilyGo T-Display boards.
+This is a port of the original DOOM source code to ESP32-based devices with integrated displays.
 
 ## Supported Boards
 
 - **LilyGo T-Display** - ESP32 with ST7789 135x240 TFT display
 - **LilyGo T-Display S3** - ESP32-S3 with ST7789 170x320 TFT display
+- **Waveshare ESP32-C6 Touch** - ESP32-C6 (RISC-V) with ST7789 172x320 capacitive touch display
 
 ## Requirements
 
@@ -24,6 +25,9 @@ pio run -e lilygo-t-display
 
 # Build for T-Display S3 (ESP32-S3)
 pio run -e lilygo-t-display-s3
+
+# Build for Waveshare ESP32-C6 Touch
+pio run -e waveshare-esp32c6-touch
 
 # Upload to connected board
 pio run -e lilygo-t-display --target upload
@@ -61,17 +65,34 @@ char* argv[] = {
 
 ## Controls
 
-The T-Display has two built-in buttons:
+### Button Controls (T-Display boards)
 
 | Button | Function |
 |--------|----------|
 | Button 1 (GPIO 0) | Fire |
 | Button 2 (GPIO 35/14) | Use/Action |
 
+### Touch Controls (Waveshare ESP32-C6 Touch)
+
+The screen is divided into zones for touch input:
+
+```
++------------+------------+------------+
+|   STRAFE   |  FORWARD   |    FIRE    |
+|    LEFT    |            |            |
++------------+------------+------------+
+|    TURN    |  BACKWARD  |    USE     |
+|    LEFT    |            |            |
++------------+------------+------------+
+```
+
+- **Left third**: Strafe left (top) / Turn left (bottom)
+- **Middle third**: Forward (top) / Backward (bottom)
+- **Right third**: Fire (top) / Use (bottom)
+
 For full gameplay, consider adding:
 - External buttons or joystick
 - Bluetooth gamepad support
-- Touch screen controls (T-Display S3)
 
 ## Memory Considerations
 
@@ -93,7 +114,9 @@ esp32doom/
 ├── src/
 │   ├── main.cpp           # Arduino entry point
 │   ├── i_video_esp32.cpp  # ESP32 video implementation
-│   └── i_system_esp32.cpp # ESP32 system implementation
+│   ├── i_system_esp32.cpp # ESP32 system implementation
+│   ├── i_touch.h          # Touch input header
+│   └── i_touch.cpp        # Touch input implementation (CST816)
 └── README.md
 ```
 
