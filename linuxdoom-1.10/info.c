@@ -132,6 +132,11 @@ void A_SpawnFly();
 void A_BrainExplode();
 
 
+// On the ESP32 (RAM-constrained) the state table is never modified at runtime,
+// so place it in flash (.rodata, XIP-mapped) instead of DRAM to save ~27KB.
+#ifdef DOOM_ESP32
+__attribute__((section(".rodata.embedded")))
+#endif
 state_t	states[NUMSTATES] = {
     {SPR_TROO,0,-1,{NULL},S_NULL,0,0},	// S_NULL
     {SPR_SHTG,4,0,{A_Light0},S_NULL,0,0},	// S_LIGHTDONE

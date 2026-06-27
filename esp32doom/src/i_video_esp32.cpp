@@ -10,9 +10,13 @@
 // DESCRIPTION:
 //  ESP32 T-Display video implementation using TFT_eSPI
 //
+//  Used by the LilyGo T-Display / T-Display S3 targets. The Waveshare
+//  ESP32-C6-Touch-LCD-1.47 has its own JD9853 backend (i_video_c6.cpp) and is
+//  excluded here.
+//
 //-----------------------------------------------------------------------------
 
-#ifdef DOOM_ESP32
+#if defined(DOOM_ESP32) && !defined(ESP32C6_TOUCH_LCD_147)
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -155,4 +159,4 @@ void I_EndRead(void)
     // Not used
 }
 
-#endif // DOOM_ESP32
+#endif // DOOM_ESP32 && !ESP32C6_TOUCH_LCD_147

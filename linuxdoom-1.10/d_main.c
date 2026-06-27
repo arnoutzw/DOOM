@@ -220,6 +220,11 @@ void D_Display (void)
     }
 
     // save the current screen if about to wipe
+#ifdef DOOM_ESP32
+    // Screen wipe disabled on RAM-constrained targets: the melt effect needs
+    // two extra full-screen scratch buffers (screens[2]/[3]) we cannot afford.
+    wipe = false;
+#else
     if (gamestate != wipegamestate)
     {
 	wipe = true;
@@ -227,6 +232,7 @@ void D_Display (void)
     }
     else
 	wipe = false;
+#endif
 
     if (gamestate == GS_LEVEL && gametic)
 	HU_Erase();
@@ -576,6 +582,12 @@ void IdentifyVersion (void)
     char *home;
     char *doomwaddir;
     doomwaddir = getenv("DOOMWADDIR");
+#ifdef DOOM_WADDIR
+    /* Embedded ports (ESP32) may not have a usable environment; fall back to a
+       compile-time WAD directory such as the SD card mount point. */
+    if (!doomwaddir)
+	doomwaddir = DOOM_WADDIR;
+#endif
     if (!doomwaddir)
 	doomwaddir = ".";
 
@@ -609,9 +621,27 @@ void IdentifyVersion (void)
     sprintf(doom2fwad, "%s/doom2f.wad", doomwaddir);
 
     home = getenv("HOME");
+#ifdef DOOM_HOMEDIR
+    if (!home)
+      home = DOOM_HOMEDIR;
+#endif
     if (!home)
       I_Error("Please set $HOME to your home directory");
     sprintf(basedefault, "%s/.doomrc", home);
+#endif
+
+#ifdef WAD_IN_FLASH
+    // The IWAD is memory-mapped from a flash partition (see i_wadflash.cpp /
+    // w_wad.c). Assume the shareware doom1.wad; D_AddFile routes ":flash:" to
+    // the mmap path. If no valid WAD is present in flash, this falls through to
+    // the normal file-based detection below.
+    extern const unsigned char* I_MapWadFlash(int* out_size);
+    if (I_MapWadFlash(NULL))
+    {
+	gamemode = shareware;
+	D_AddFile (":flash:");
+	return;
+    }
 #endif
 
     if (M_CheckParm ("-shdev"))

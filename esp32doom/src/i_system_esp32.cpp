@@ -42,8 +42,14 @@ void D_PostEvent(event_t* ev);
 #define BUTTON_2 -1
 #endif
 
-// Zone memory size - ESP32 has limited RAM
-#ifdef BOARD_HAS_PSRAM
+// Zone memory size - ESP32 has limited RAM.
+// Override at build time with -DDOOM_ZONE_SIZE=<bytes> to tune for a board.
+// NOTE: on the ESP32-C6 (512KB SRAM, no PSRAM) the zone heap competes with the
+// ~250KB of screen buffers allocated by V_Init/I_AllocLow, so a full level will
+// not fit. See esp32doom/README.md.
+#ifdef DOOM_ZONE_SIZE
+#define ZONE_SIZE (DOOM_ZONE_SIZE)
+#elif defined(BOARD_HAS_PSRAM)
 #define ZONE_SIZE (4 * 1024 * 1024)  // 4MB with PSRAM
 #else
 #define ZONE_SIZE (256 * 1024)        // 256KB without PSRAM
@@ -135,7 +141,7 @@ void I_StartTic(void)
     bool button1State = digitalRead(BUTTON_1);
     if (button1State != lastButton1State) {
         event.type = button1State == LOW ? ev_keydown : ev_keyup;
-        event.data1 = KEY_FIRE;  // Map to fire button
+        event.data1 = KEY_RCTRL;  // Map to fire
         event.data2 = 0;
         event.data3 = 0;
         D_PostEvent(&event);
@@ -148,7 +154,7 @@ void I_StartTic(void)
     bool button2State = digitalRead(BUTTON_2);
     if (button2State != lastButton2State) {
         event.type = button2State == LOW ? ev_keydown : ev_keyup;
-        event.data1 = KEY_USE;  // Map to use button
+        event.data1 = ' ';  // Map to use (space)
         event.data2 = 0;
         event.data3 = 0;
         D_PostEvent(&event);
@@ -170,12 +176,14 @@ ticcmd_t* I_BaseTiccmd(void)
     return &emptycmd;
 }
 
+// Defined in the active video backend (C linkage).
+extern "C" void I_ShutdownGraphics(void);
+
 void I_Quit(void)
 {
     Serial.println("DOOM: Quit requested");
 
     // Clean shutdown
-    extern void I_ShutdownGraphics(void);
     I_ShutdownGraphics();
 
     // Restart ESP32

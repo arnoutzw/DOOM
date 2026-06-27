@@ -28,7 +28,9 @@
 #pragma interface
 #endif
 
+#ifndef MAXVISSPRITES
 #define MAXVISSPRITES  	128
+#endif
 
 extern vissprite_t	vissprites[MAXVISSPRITES];
 extern vissprite_t*	vissprite_p;

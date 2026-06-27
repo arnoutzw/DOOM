@@ -4,8 +4,28 @@
 // Copyright (C) 1993-1996 by id Software, Inc.
 //
 // DESCRIPTION:
-//  Touch input handler for ESP32 touch displays
-//  Supports CST816S/CST816T capacitive touch controllers
+//  Touch input handler for the Waveshare ESP32-C6-Touch-LCD-1.47.
+//  Capacitive touch controller: AXS5106L (I2C @ 0x63).
+//
+//  The panel is single-touch. The 1.47" display is used in landscape, so the
+//  screen is divided into a 3x2 grid of control zones. Because only one finger
+//  can be tracked at a time, the active mapping depends on game state:
+//
+//    In a level (gamestate == GS_LEVEL, no menu):
+//      +------------+------------+------------+
+//      | STRAFE L   |  FORWARD   |    FIRE    |
+//      +------------+------------+------------+
+//      | TURN  L    |  BACKWARD  |  USE/OPEN  |
+//      +------------+------------+------------+
+//      (turn right / strafe right are reached by combining FORWARD with the
+//       single-touch limitation in mind; see README)
+//
+//    In menus / intermission / finale:
+//      +------------+------------+------------+
+//      |    BACK    |     UP     |   SELECT   |   (ESC / UP / ENTER)
+//      +------------+------------+------------+
+//      |    BACK    |    DOWN    |   SELECT   |
+//      +------------+------------+------------+
 //
 //-----------------------------------------------------------------------------
 
@@ -20,233 +40,239 @@ extern "C" {
 #include "doomdef.h"
 #include "doomtype.h"
 #include "d_event.h"
+#include "doomstat.h"
 
 void D_PostEvent(event_t* ev);
 }
 
-// Touch controller I2C address (CST816S/CST816T)
-#define CST816_ADDR 0x15
+// menuactive lives in m_menu.c
+extern "C" boolean menuactive;
 
-// Touch pins - defined in platformio.ini
+// AXS5106L I2C address.
+#define AXS5106L_ADDR 0x63
+
+// Touch pins - defined in platformio.ini.
 #ifndef TOUCH_SDA
-#define TOUCH_SDA 6
+#define TOUCH_SDA 18
 #endif
 #ifndef TOUCH_SCL
-#define TOUCH_SCL 7
+#define TOUCH_SCL 19
 #endif
 #ifndef TOUCH_INT
-#define TOUCH_INT -1
+#define TOUCH_INT 21
 #endif
 #ifndef TOUCH_RST
-#define TOUCH_RST -1
+#define TOUCH_RST 20
 #endif
 
-// Screen dimensions for touch mapping
+// Native (portrait) panel dimensions, for coordinate transform.
+#ifndef LCD_PANEL_W
+#define LCD_PANEL_W 172
+#endif
+#ifndef LCD_PANEL_H
+#define LCD_PANEL_H 320
+#endif
+
+// Landscape display dimensions (zone layout space).
 #ifndef DOOMGENERIC_RESX
 #define DOOMGENERIC_RESX 320
 #endif
 #ifndef DOOMGENERIC_RESY
-#define DOOMGENERIC_RESY 240
+#define DOOMGENERIC_RESY 172
 #endif
 
-// Touch zone definitions (screen divided into regions)
-// Layout:
-// +-------+-------+-------+
-// | STRFE | FORWD | FIRE  |
-// | LEFT  |       |       |
-// +-------+-------+-------+
-// | TURN  | BACK  | USE   |
-// | LEFT  |       |       |
-// +-------+-------+-------+
-//
-// Left third: movement (strafe/turn)
-// Middle third: forward/backward
-// Right third: fire/use
+// Coordinate transform tuning. Flip these if the touch axes feel reversed on
+// real hardware.
+#ifndef TOUCH_INVERT_X
+#define TOUCH_INVERT_X 0
+#endif
+#ifndef TOUCH_INVERT_Y
+#define TOUCH_INVERT_Y 1
+#endif
 
-#define ZONE_LEFT_X   (DOOMGENERIC_RESX / 3)
-#define ZONE_RIGHT_X  (DOOMGENERIC_RESX * 2 / 3)
-#define ZONE_MID_Y    (DOOMGENERIC_RESY / 2)
+// DOOM key codes for the actions we generate.
+#define K_FORWARD     KEY_UPARROW
+#define K_BACKWARD    KEY_DOWNARROW
+#define K_TURNLEFT    KEY_LEFTARROW
+#define K_TURNRIGHT   KEY_RIGHTARROW
+#define K_FIRE        KEY_RCTRL
+#define K_USE         ' '
+#define K_STRAFELEFT  ','
+#define K_STRAFERIGHT '.'
+#define K_SELECT      KEY_ENTER
+#define K_BACK        KEY_ESCAPE
 
-// Touch state tracking
+#define MAX_HELD 2
+
+// Currently-held DOOM keys (so we can release them on touch-up / zone change).
+static int heldKeys[MAX_HELD];
+static int heldCount = 0;
 static bool touchActive = false;
-static int lastTouchX = -1;
-static int lastTouchY = -1;
 
-// Key states for detecting changes
-static bool keyForward = false;
-static bool keyBackward = false;
-static bool keyLeft = false;
-static bool keyRight = false;
-static bool keyFire = false;
-static bool keyUse = false;
-static bool keyStrafeLeft = false;
-static bool keyStrafeRight = false;
+static void releaseAll(void)
+{
+    event_t ev;
+    for (int i = 0; i < heldCount; i++) {
+        ev.type = ev_keyup;
+        ev.data1 = heldKeys[i];
+        ev.data2 = ev.data3 = 0;
+        D_PostEvent(&ev);
+    }
+    heldCount = 0;
+}
 
-// Read touch data from CST816
+static void pressKeys(const int* keys, int count)
+{
+    // If the set of held keys already matches, do nothing.
+    if (count == heldCount) {
+        bool same = true;
+        for (int i = 0; i < count; i++) {
+            if (heldKeys[i] != keys[i]) { same = false; break; }
+        }
+        if (same) return;
+    }
+
+    releaseAll();
+
+    event_t ev;
+    for (int i = 0; i < count && i < MAX_HELD; i++) {
+        ev.type = ev_keydown;
+        ev.data1 = keys[i];
+        ev.data2 = ev.data3 = 0;
+        D_PostEvent(&ev);
+        heldKeys[heldCount++] = keys[i];
+    }
+}
+
+// Read one touch point from the AXS5106L. Returns true on a successful I2C
+// transaction; *pressed indicates whether a finger is down.
 static bool readTouch(int* x, int* y, bool* pressed)
 {
-    Wire.beginTransmission(CST816_ADDR);
-    Wire.write(0x01);  // Register for touch data
-    if (Wire.endTransmission() != 0) {
+    Wire.beginTransmission(AXS5106L_ADDR);
+    Wire.write(0x01);  // touch data register
+    if (Wire.endTransmission(false) != 0) {
         return false;
     }
 
-    Wire.requestFrom(CST816_ADDR, 6);
-    if (Wire.available() < 6) {
+    const int want = 14;
+    int got = Wire.requestFrom(AXS5106L_ADDR, want);
+    if (got < 6) {
         return false;
     }
 
-    uint8_t gesture = Wire.read();
-    uint8_t touchPoints = Wire.read();
-    uint8_t xHigh = Wire.read();
-    uint8_t xLow = Wire.read();
-    uint8_t yHigh = Wire.read();
-    uint8_t yLow = Wire.read();
+    uint8_t buf[14];
+    for (int i = 0; i < got && i < want; i++) {
+        buf[i] = Wire.read();
+    }
 
-    *pressed = (touchPoints > 0);
-    *x = ((xHigh & 0x0F) << 8) | xLow;
-    *y = ((yHigh & 0x0F) << 8) | yLow;
-
+    uint8_t fingers = buf[1];
+    *pressed = (fingers > 0 && fingers != 0xFF);
+    // 12-bit coordinates, high nibble in the status byte of each point.
+    *x = ((buf[2] & 0x0F) << 8) | buf[3];
+    *y = ((buf[4] & 0x0F) << 8) | buf[5];
     return true;
 }
 
-static void postKeyEvent(int key, bool pressed)
+// Map raw (portrait) touch coordinates to landscape display coordinates.
+static void toDisplay(int tx, int ty, int* dx, int* dy)
 {
-    event_t event;
-    event.type = pressed ? ev_keydown : ev_keyup;
-    event.data1 = key;
-    event.data2 = 0;
-    event.data3 = 0;
-    D_PostEvent(&event);
+    // Landscape rotation: panel Y -> display X, panel X -> display Y.
+    int X = ty;                       // 0 .. LCD_PANEL_H-1  -> 0 .. dispW-1
+    int Y = tx;                       // 0 .. LCD_PANEL_W-1  -> 0 .. dispH-1
+
+#if TOUCH_INVERT_X
+    X = (LCD_PANEL_H - 1) - X;
+#endif
+#if TOUCH_INVERT_Y
+    Y = (LCD_PANEL_W - 1) - Y;
+#endif
+
+    // Scale into the landscape display space.
+    *dx = (X * DOOMGENERIC_RESX) / LCD_PANEL_H;
+    *dy = (Y * DOOMGENERIC_RESY) / LCD_PANEL_W;
+    if (*dx < 0) *dx = 0;
+    if (*dx >= DOOMGENERIC_RESX) *dx = DOOMGENERIC_RESX - 1;
+    if (*dy < 0) *dy = 0;
+    if (*dy >= DOOMGENERIC_RESY) *dy = DOOMGENERIC_RESY - 1;
 }
 
 void I_InitTouch(void)
 {
-    // Initialize I2C for touch controller
     Wire.begin(TOUCH_SDA, TOUCH_SCL);
-    Wire.setClock(400000);  // 400kHz I2C
+    Wire.setClock(400000);
 
-    // Reset touch controller if reset pin available
 #if TOUCH_RST >= 0
     pinMode(TOUCH_RST, OUTPUT);
     digitalWrite(TOUCH_RST, LOW);
-    delay(10);
+    delay(200);
     digitalWrite(TOUCH_RST, HIGH);
-    delay(50);
+    delay(300);
 #endif
 
-    // Setup interrupt pin if available
 #if TOUCH_INT >= 0
-    pinMode(TOUCH_INT, INPUT);
+    pinMode(TOUCH_INT, INPUT_PULLUP);
 #endif
 
-    Serial.println("Touch controller initialized");
+    Serial.println("AXS5106L touch initialized");
 }
 
 void I_UpdateTouch(void)
 {
-    int x, y;
+    int rawX, rawY;
     bool pressed;
 
-    if (!readTouch(&x, &y, &pressed)) {
-        return;
-    }
-
-    // Handle touch release - release all keys
-    if (!pressed && touchActive) {
-        touchActive = false;
-
-        if (keyForward) { postKeyEvent(KEY_UPARROW, false); keyForward = false; }
-        if (keyBackward) { postKeyEvent(KEY_DOWNARROW, false); keyBackward = false; }
-        if (keyLeft) { postKeyEvent(KEY_LEFTARROW, false); keyLeft = false; }
-        if (keyRight) { postKeyEvent(KEY_RIGHTARROW, false); keyRight = false; }
-        if (keyFire) { postKeyEvent(KEY_FIRE, false); keyFire = false; }
-        if (keyUse) { postKeyEvent(KEY_USE, false); keyUse = false; }
-        if (keyStrafeLeft) { postKeyEvent(',', false); keyStrafeLeft = false; }
-        if (keyStrafeRight) { postKeyEvent('.', false); keyStrafeRight = false; }
-
+    if (!readTouch(&rawX, &rawY, &pressed)) {
         return;
     }
 
     if (!pressed) {
+        if (touchActive) {
+            releaseAll();
+            touchActive = false;
+        }
         return;
     }
 
     touchActive = true;
-    lastTouchX = x;
-    lastTouchY = y;
 
-    // Determine which zone was touched
-    bool newForward = false;
-    bool newBackward = false;
-    bool newLeft = false;
-    bool newRight = false;
-    bool newFire = false;
-    bool newUse = false;
-    bool newStrafeLeft = false;
-    bool newStrafeRight = false;
+    int dx, dy;
+    toDisplay(rawX, rawY, &dx, &dy);
 
-    if (x < ZONE_LEFT_X) {
-        // Left zone: strafe left (top) / turn left (bottom)
-        if (y < ZONE_MID_Y) {
-            newStrafeLeft = true;
+    int col = dx / (DOOMGENERIC_RESX / 3);   // 0,1,2
+    if (col > 2) col = 2;
+    bool topRow = (dy < DOOMGENERIC_RESY / 2);
+
+    int keys[MAX_HELD];
+    int n = 0;
+
+    bool inMenu = menuactive || (gamestate != GS_LEVEL);
+
+    if (inMenu) {
+        // Menu / non-gameplay mapping.
+        if (col == 0) {
+            keys[n++] = K_BACK;            // ESC
+        } else if (col == 2) {
+            keys[n++] = K_SELECT;          // ENTER
         } else {
-            newLeft = true;
-        }
-    } else if (x > ZONE_RIGHT_X) {
-        // Right zone: fire (top) / use (bottom)
-        if (y < ZONE_MID_Y) {
-            newFire = true;
-        } else {
-            newUse = true;
+            keys[n++] = topRow ? KEY_UPARROW : KEY_DOWNARROW;
         }
     } else {
-        // Middle zone: forward (top) / backward (bottom)
-        if (y < ZONE_MID_Y) {
-            newForward = true;
+        // In-level mapping.
+        if (col == 0) {
+            keys[n++] = topRow ? K_STRAFELEFT : K_TURNLEFT;
+        } else if (col == 2) {
+            keys[n++] = topRow ? K_FIRE : K_USE;
         } else {
-            newBackward = true;
+            keys[n++] = topRow ? K_FORWARD : K_BACKWARD;
         }
     }
 
-    // Post events for state changes
-    if (newForward != keyForward) {
-        postKeyEvent(KEY_UPARROW, newForward);
-        keyForward = newForward;
-    }
-    if (newBackward != keyBackward) {
-        postKeyEvent(KEY_DOWNARROW, newBackward);
-        keyBackward = newBackward;
-    }
-    if (newLeft != keyLeft) {
-        postKeyEvent(KEY_LEFTARROW, newLeft);
-        keyLeft = newLeft;
-    }
-    if (newRight != keyRight) {
-        postKeyEvent(KEY_RIGHTARROW, newRight);
-        keyRight = newRight;
-    }
-    if (newFire != keyFire) {
-        postKeyEvent(KEY_FIRE, newFire);
-        keyFire = newFire;
-    }
-    if (newUse != keyUse) {
-        postKeyEvent(KEY_USE, newUse);
-        keyUse = newUse;
-    }
-    if (newStrafeLeft != keyStrafeLeft) {
-        postKeyEvent(',', newStrafeLeft);
-        keyStrafeLeft = newStrafeLeft;
-    }
-    if (newStrafeRight != keyStrafeRight) {
-        postKeyEvent('.', newStrafeRight);
-        keyStrafeRight = newStrafeRight;
-    }
+    pressKeys(keys, n);
 }
 
 void I_ShutdownTouch(void)
 {
-    // Nothing to clean up
+    releaseAll();
 }
 
 #endif // USE_TOUCH_INPUT
