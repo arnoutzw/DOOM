@@ -176,12 +176,14 @@ ticcmd_t* I_BaseTiccmd(void)
     return &emptycmd;
 }
 
+// Defined in the active video backend (C linkage).
+extern "C" void I_ShutdownGraphics(void);
+
 void I_Quit(void)
 {
     Serial.println("DOOM: Quit requested");
 
     // Clean shutdown
-    extern void I_ShutdownGraphics(void);
     I_ShutdownGraphics();
 
     // Restart ESP32

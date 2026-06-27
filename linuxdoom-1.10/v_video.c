@@ -479,15 +479,32 @@ V_GetBlock
 //
 // V_Init
 // 
-void V_Init (void) 
-{ 
+void V_Init (void)
+{
     int		i;
     byte*	base;
-		
+
     // stick these in low dos memory on PCs
 
+#ifdef DOOM_ESP32
+    // RAM-constrained build: allocate DOOM_SCREEN_BUFFERS full-screen buffers
+    // (each SCREENWIDTH*SCREENHEIGHT = 64000 bytes) and alias the rest to
+    // buffer 0. The screen wipe is disabled in D_Display(), so screens[2]/[3]
+    // (wipe scratch) are never written. With 1 buffer the border/intermission/
+    // savegame paths scribble the visible buffer (cosmetic) instead of OOMing.
+    //   1 buffer  = 64KB  (needed to boot/title/menu on a 512KB-SRAM C6)
+    //   2 buffers = 128KB (cleaner border/intermission; needs more heap)
+#ifndef DOOM_SCREEN_BUFFERS
+#define DOOM_SCREEN_BUFFERS 2
+#endif
+    base = I_AllocLow (SCREENWIDTH*SCREENHEIGHT*DOOM_SCREEN_BUFFERS);
+    for (i = 0; i < 4; i++)
+        screens[i] = base + ((i < DOOM_SCREEN_BUFFERS ? i : 0)
+                             * SCREENWIDTH*SCREENHEIGHT);
+#else
     base = I_AllocLow (SCREENWIDTH*SCREENHEIGHT*4);
 
     for (i=0 ; i<4 ; i++)
 	screens[i] = base + i*SCREENWIDTH*SCREENHEIGHT;
+#endif
 }

@@ -17,23 +17,67 @@ directly; the Linux/X11-specific modules (`i_video.c`, `i_system.c`,
 ## ⚠️ Memory reality on the ESP32-C6 (read this first)
 
 The ESP32-C6 has **512 KB of SRAM and no PSRAM**. The classic DOOM engine
-allocates the four 320×200 screen buffers (~250 KB via `I_AllocLow`) **plus** a
-multi-megabyte zone heap (`I_ZoneBase`). On a 512 KB part the zone heap is
-capped (see `ZONE_SIZE` in `i_system_esp32.cpp`) and there is **not enough RAM
-to run a full level the way a PSRAM-equipped board can**.
+allocates four 320×200 screen buffers (~250 KB) **plus** a multi-megabyte zone
+heap. This port aggressively shrinks that footprint (see *Fitting in 512 KB*
+below), but the classic engine's working set still sits at the very edge of —
+and for a full level, beyond — the C6's physically available RAM.
 
-This port therefore:
+**What is verified:** the firmware **compiles and links** into a flashable
+image (toolchain set up in this repo's CI notes), and the static-RAM diet
+described below is measured from the linked ELF.
 
-- Targets the **real hardware correctly** (JD9853 display, AXS5106L touch, true
-  GPIO map, 8 MB flash, microSD WAD loading) so it builds and brings the board
-  up, and
-- Is **honest that the stock engine is RAM-starved on this exact board.** To get
-  past early allocation you will likely need to shrink the engine's memory
-  footprint (smaller zone, freeing the duplicate screen buffers, streaming WAD
-  lumps from flash instead of caching them). Those engine-level optimizations
-  are intentionally **not** baked in here.
+**What needs the actual board:** runtime behaviour (boot, title screen, touch
+menus) has not been validated on hardware in this environment. The math says
+the title/menu are borderline-feasible and a full level is not — see the
+budget below.
 
-The LilyGo T-Display **S3** (8 MB PSRAM) remains the most comfortable target.
+The LilyGo T-Display **S3** (8 MB PSRAM) remains the only comfortable target
+for actual gameplay.
+
+## Fitting in 512 KB RAM
+
+The ESP32-C6 has **512 KB SRAM, no PSRAM**. After the Arduino/IDF system claims
+its share, the linker leaves an `sram_seg` of **~441 KB** for the application
+(static data **and** heap). Measured from the linked firmware:
+
+| Region | Size |
+|--------|------|
+| `sram_seg` total (static + heap) | ~441 KB |
+| App + IDF static (`.data`+`.bss`, up to `_heap_start`) | ~229 KB |
+| → of which mandatory IDF/WiFi/**BLE** system static | ~54 KB |
+| **Free heap at boot** | **~212 KB** |
+| …minus FreeRTOS/loop + DOOM task stacks (~40 KB) | **~170 KB usable** |
+
+DOOM's unavoidable runtime allocations: WAD directory (~55 KB for shareware's
+2306 lumps) + one 320×200 framebuffer (64 KB) = **119 KB fixed**, leaving only
+~50 KB for the zone heap — enough to reach the title/menu, **not** a level
+(E1M1 alone needs ~142 KB of resident level geometry, measured from the WAD).
+
+### RAM optimizations applied (static RAM 348 KB → 180 KB by PlatformIO's metric)
+
+- **Read-only math tables → flash.** `finesine`/`finetangent`/`tantoangle`
+  (~65 KB) are made `const` so they live in XIP flash instead of DRAM.
+- **State table → flash.** `info.c`'s `states[]` (~27 KB), never written at
+  runtime, is forced into `.rodata` via a section attribute.
+- **Renderer scratch trimmed.** `MAXVISPLANES` 128→64, `MAXOPENINGS` 64→24×width,
+  `MAXVISSPRITES`/`MAXDRAWSEGS` reduced — frees ~75 KB of `.bss`. (Raise these
+  if you hit *"no more visplanes"* / opening overflow.)
+- **Framebuffers: 4 → 1.** The screen wipe is disabled and `DOOM_SCREEN_BUFFERS`
+  defaults to 1 on this board (64 KB instead of 256 KB). Border/intermission
+  paths then scribble the visible buffer (cosmetic) rather than allocate more.
+- **Tunable zone.** `DOOM_ZONE_SIZE` sets the heap budget for the zone.
+
+All knobs are `-D` flags in `platformio.ini`; tune them to your board's measured
+`ESP.getFreeHeap()`.
+
+### The honest conclusion
+
+Even fully optimized, WAD-directory + framebuffer + a level's geometry exceed
+the ~170 KB usable heap. Running an actual level on this PSRAM-less board would
+require deeper engine surgery (memory-mapping WAD lumps from flash to avoid the
+zone cache, compacting `lumpinfo`, and a custom IDF build that drops the ~54 KB
+of BLE/WiFi static). The framebuffer + title/menu path is the realistic ceiling
+here; gameplay wants PSRAM.
 
 ## Building
 

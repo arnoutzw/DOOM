@@ -220,6 +220,11 @@ void D_Display (void)
     }
 
     // save the current screen if about to wipe
+#ifdef DOOM_ESP32
+    // Screen wipe disabled on RAM-constrained targets: the melt effect needs
+    // two extra full-screen scratch buffers (screens[2]/[3]) we cannot afford.
+    wipe = false;
+#else
     if (gamestate != wipegamestate)
     {
 	wipe = true;
@@ -227,6 +232,7 @@ void D_Display (void)
     }
     else
 	wipe = false;
+#endif
 
     if (gamestate == GS_LEVEL && gametic)
 	HU_Erase();

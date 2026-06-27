@@ -81,7 +81,11 @@ typedef enum
 //  and unfinished. Default is synchronous.
 // Experimental asynchronous timer based is
 //  handled by SNDINTR. 
+#ifndef DOOM_ESP32
+// The external sndserver pipe hack is Unix-only; the ESP32 port uses its own
+// silent sound backend (i_sound_esp32.cpp), so leave SNDSERV undefined there.
 #define SNDSERV  1
+#endif
 //#define SNDINTR  1
 
 

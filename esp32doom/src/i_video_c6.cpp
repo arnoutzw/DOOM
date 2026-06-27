@@ -65,7 +65,9 @@ extern "C" {
 #endif
 
 static Arduino_DataBus* bus = nullptr;
-static Arduino_GFX* gfx = nullptr;
+// Declared as Arduino_TFT* (the Arduino_ST7789 parent) so the row-streaming API
+// writeAddrWindow()/writePixels() is accessible, not just the Arduino_GFX base.
+static Arduino_TFT* gfx = nullptr;
 
 // 256-entry RGB565 palette (native order; Arduino_GFX handles byte order).
 static uint16_t palette_rgb565[256];

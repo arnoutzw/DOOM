@@ -66,10 +66,13 @@ void**			lumpcache;
 
 #define strcmpi	strcasecmp
 
+#ifndef DOOM_ESP32
+/* newlib (ESP32 toolchain) already provides strupr(); avoid the conflict. */
 void strupr (char* s)
 {
     while (*s) { *s = toupper(*s); s++; }
 }
+#endif
 
 int filelength (int handle) 
 { 
