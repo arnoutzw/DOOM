@@ -1,0 +1,11 @@
+# Partition table for ESP32-C6-Touch-LCD-1.47 (8 MB flash)
+#
+# A single large app (no OTA) plus a LittleFS data partition large enough to
+# optionally hold doom1.wad (~4 MB) on internal flash. The microSD card is the
+# recommended place for the WAD, but this leaves room for a flash-resident copy.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+factory,  app,  factory, 0x10000,  0x300000,
+storage,  data, spiffs,  0x310000, 0x4E0000,

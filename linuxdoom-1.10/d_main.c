@@ -576,6 +576,12 @@ void IdentifyVersion (void)
     char *home;
     char *doomwaddir;
     doomwaddir = getenv("DOOMWADDIR");
+#ifdef DOOM_WADDIR
+    /* Embedded ports (ESP32) may not have a usable environment; fall back to a
+       compile-time WAD directory such as the SD card mount point. */
+    if (!doomwaddir)
+	doomwaddir = DOOM_WADDIR;
+#endif
     if (!doomwaddir)
 	doomwaddir = ".";
 
@@ -609,6 +615,10 @@ void IdentifyVersion (void)
     sprintf(doom2fwad, "%s/doom2f.wad", doomwaddir);
 
     home = getenv("HOME");
+#ifdef DOOM_HOMEDIR
+    if (!home)
+      home = DOOM_HOMEDIR;
+#endif
     if (!home)
       I_Error("Please set $HOME to your home directory");
     sprintf(basedefault, "%s/.doomrc", home);
