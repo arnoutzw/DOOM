@@ -66,18 +66,40 @@ DOOM's unavoidable runtime allocations: WAD directory (~55 KB for shareware's
   defaults to 1 on this board (64 KB instead of 256 KB). Border/intermission
   paths then scribble the visible buffer (cosmetic) rather than allocate more.
 - **Tunable zone.** `DOOM_ZONE_SIZE` sets the heap budget for the zone.
+- **WAD memory-mapped from flash** (`WAD_IN_FLASH`). The IWAD is flashed to a
+  raw `wad` partition and `esp_partition_mmap`'d; `w_wad.c` returns pointers
+  straight into that XIP mapping, so lumps (textures/sprites/flats/sounds) are
+  **never copied into RAM**. The zone heap then only ever holds parsed level
+  geometry, and no microSD card is required. See `i_wadflash.cpp`.
 
 All knobs are `-D` flags in `platformio.ini`; tune them to your board's measured
 `ESP.getFreeHeap()`.
 
 ### The honest conclusion
 
-Even fully optimized, WAD-directory + framebuffer + a level's geometry exceed
-the ~170 KB usable heap. Running an actual level on this PSRAM-less board would
-require deeper engine surgery (memory-mapping WAD lumps from flash to avoid the
-zone cache, compacting `lumpinfo`, and a custom IDF build that drops the ~54 KB
-of BLE/WiFi static). The framebuffer + title/menu path is the realistic ceiling
-here; gameplay wants PSRAM.
+With every optimization above the firmware **builds and flashes**, the WAD lives
+in flash, and the title screen + touch menus fit the ~170 KB usable heap
+(framebuffer 64 KB + WAD directory ~55 KB + a small zone).
+
+A **full level still does not fit.** E1M1's parsed geometry alone is ~142 KB and
+*must* live in the zone (it is not lump data, so the flash mmap cannot help it);
+142 KB + the 64 KB framebuffer already exceeds the usable heap. The only
+remaining ~54 KB lever is the IDF/**BLE** system static, which can only be
+removed by recompiling ESP-IDF from source with `CONFIG_BT_ENABLED=n` — and
+pioarduino's `custom_sdkconfig` path re-downloads the framework from the
+PlatformIO registry, which is blocked in the CI sandbox this was built in.
+
+So: **gameplay needs PSRAM** (use the LilyGo T-Display S3), *or* a from-source
+IDF build that frees the BLE static plus a compacted `lumpinfo` — both beyond
+what this PSRAM-less board + sandbox can reach. Everything short of that is done
+and in place.
+
+### Flashing the WAD to the `wad` partition
+
+```bash
+# 3 MB app ends at 0x310000, where the raw wad partition begins
+esptool.py --chip esp32c6 write_flash 0x310000 doom1.wad
+```
 
 ## Building
 

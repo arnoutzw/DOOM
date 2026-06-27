@@ -141,6 +141,57 @@ int			reloadlump;
 char*			reloadname;
 
 
+#ifdef WAD_IN_FLASH
+// Base pointer of the memory-mapped IWAD in flash (set by W_AddFile when the
+// special ":flash:" name is used). Lumps from this WAD are read in place.
+#define WAD_FLASH_HANDLE	(-2)
+const byte*		wad_flash_base = NULL;
+extern const unsigned char* I_MapWadFlash(int* out_size);   // i_wadflash.cpp
+
+// Parse the WAD header + directory straight out of the flash mapping and append
+// the lumps to lumpinfo[]. Returns 1 on success, 0 if no valid flash WAD.
+static int W_AddFlashWad (void)
+{
+    const byte*		base;
+    wadinfo_t		header;
+    const filelump_t*	fileinfo;
+    lumpinfo_t*		lump_p;
+    unsigned		i;
+    int			startlump;
+    int			mapsize = 0;
+
+    base = (const byte*)I_MapWadFlash(&mapsize);
+    if (!base)
+	return 0;
+
+    wad_flash_base = base;
+    memcpy (&header, base, sizeof(header));
+    header.numlumps     = LONG(header.numlumps);
+    header.infotableofs = LONG(header.infotableofs);
+
+    startlump = numlumps;
+    numlumps += header.numlumps;
+    fileinfo = (const filelump_t*)(base + header.infotableofs);
+
+    lumpinfo = realloc (lumpinfo, numlumps*sizeof(lumpinfo_t));
+    if (!lumpinfo)
+	I_Error ("Couldn't realloc lumpinfo");
+
+    lump_p = &lumpinfo[startlump];
+    for (i=startlump ; i<numlumps ; i++,lump_p++, fileinfo++)
+    {
+	lump_p->handle   = WAD_FLASH_HANDLE;
+	lump_p->position = LONG(fileinfo->filepos);
+	lump_p->size     = LONG(fileinfo->size);
+	strncpy (lump_p->name, fileinfo->name, 8);
+    }
+
+    printf (" mmap'd IWAD from flash: %d lumps\n", header.numlumps);
+    return 1;
+}
+#endif // WAD_IN_FLASH
+
+
 void W_AddFile (char *filename)
 {
     wadinfo_t		header;
@@ -152,7 +203,19 @@ void W_AddFile (char *filename)
     filelump_t*		fileinfo;
     filelump_t		singleinfo;
     int			storehandle;
-    
+
+#ifdef WAD_IN_FLASH
+    // Special name: memory-map the IWAD from the flash partition instead of
+    // opening a file. Falls through to normal file handling if no flash WAD.
+    if (!strcmp (filename, ":flash:"))
+    {
+	if (W_AddFlashWad ())
+	    return;
+	printf (" no flash WAD; falling back to file I/O\n");
+	return;
+    }
+#endif
+
     // open the file and add to directory
 
     // handle reload indicator.
@@ -444,9 +507,18 @@ W_ReadLump
 	I_Error ("W_ReadLump: %i >= numlumps",lump);
 
     l = lumpinfo+lump;
-	
+
+#ifdef WAD_IN_FLASH
+    if (l->handle == WAD_FLASH_HANDLE)
+    {
+	// Lump lives in memory-mapped flash; just copy it out.
+	memcpy (dest, wad_flash_base + l->position, l->size);
+	return;
+    }
+#endif
+
     // ??? I_BeginRead ();
-	
+
     if (l->handle == -1)
     {
 	// reloadable file, so use open / read / close
@@ -484,7 +556,18 @@ W_CacheLumpNum
 
     if ((unsigned)lump >= numlumps)
 	I_Error ("W_CacheLumpNum: %i >= numlumps",lump);
-		
+
+#ifdef WAD_IN_FLASH
+    if (lumpinfo[lump].handle == WAD_FLASH_HANDLE)
+    {
+	// Return a pointer straight into the flash mapping: no zone allocation,
+	// no copy. The lump is read in place by the renderer/game. (tag is
+	// irrelevant; flash-resident lumps are never purged.)
+	(void)tag;
+	return (void*)(wad_flash_base + lumpinfo[lump].position);
+    }
+#endif
+
     if (!lumpcache[lump])
     {
 	// read the lump in

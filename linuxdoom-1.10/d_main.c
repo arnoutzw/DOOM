@@ -630,6 +630,20 @@ void IdentifyVersion (void)
     sprintf(basedefault, "%s/.doomrc", home);
 #endif
 
+#ifdef WAD_IN_FLASH
+    // The IWAD is memory-mapped from a flash partition (see i_wadflash.cpp /
+    // w_wad.c). Assume the shareware doom1.wad; D_AddFile routes ":flash:" to
+    // the mmap path. If no valid WAD is present in flash, this falls through to
+    // the normal file-based detection below.
+    extern const unsigned char* I_MapWadFlash(int* out_size);
+    if (I_MapWadFlash(NULL))
+    {
+	gamemode = shareware;
+	D_AddFile (":flash:");
+	return;
+    }
+#endif
+
     if (M_CheckParm ("-shdev"))
     {
 	gamemode = shareware;
